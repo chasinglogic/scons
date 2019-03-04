@@ -84,15 +84,12 @@ class Jobs(object):
 
         self.job = None
         if num > 1:
-            stack_size = explicit_stack_size
-            if stack_size is None:
-                stack_size = default_stack_size
-                
             try:
-                self.job = Parallel(taskmaster, num, stack_size)
+                self.job = Parallel(taskmaster, num)
                 self.num_jobs = num
             except NameError:
                 pass
+
         if self.job is None:
             self.job = Serial(taskmaster)
             self.num_jobs = 1
@@ -223,19 +220,17 @@ class Serial(object):
 # Parallel class (and its dependent classes) will work if the interpreter
 # doesn't support threads.
 try:
-    import queue
-    import threading
+    import multiprocessing
 except ImportError:
     pass
 else:
-    class Worker(threading.Thread):
+    class Worker(multiprocessing.Process):
         """A worker thread waits on a task to be posted to its request queue,
         dequeues the task, executes it, and posts a tuple including the task
         and a boolean indicating whether the task executed successfully. """
 
         def __init__(self, requestQueue, resultsQueue, interrupted):
-            threading.Thread.__init__(self)
-            self.setDaemon(1)
+            multiprocessing.Process.__init__(self)
             self.requestQueue = requestQueue
             self.resultsQueue = resultsQueue
             self.interrupted = interrupted
@@ -244,7 +239,6 @@ else:
         def run(self):
             while True:
                 task = self.requestQueue.get()
-
                 if task is None:
                     # The "None" value is used as a sentinel by
                     # ThreadPool.cleanup().  This indicates that there
@@ -267,36 +261,21 @@ else:
     class ThreadPool(object):
         """This class is responsible for spawning and managing worker threads."""
 
-        def __init__(self, num, stack_size, interrupted):
+        def __init__(self, num, interrupted):
             """Create the request and reply queues, and 'num' worker threads.
             
             One must specify the stack size of the worker threads. The
             stack size is specified in kilobytes.
             """
-            self.requestQueue = queue.Queue(0)
-            self.resultsQueue = queue.Queue(0)
-
-            try:
-                prev_size = threading.stack_size(stack_size*1024) 
-            except AttributeError as e:
-                # Only print a warning if the stack size has been
-                # explicitly set.
-                if not explicit_stack_size is None:
-                    msg = "Setting stack size is unsupported by this version of Python:\n    " + \
-                        e.args[0]
-                    SCons.Warnings.warn(SCons.Warnings.StackSizeWarning, msg)
-            except ValueError as e:
-                msg = "Setting stack size failed:\n    " + str(e)
-                SCons.Warnings.warn(SCons.Warnings.StackSizeWarning, msg)
+            print('Using Mathew\'s super hyper threadpool')
+            self.requestQueue = multiprocessing.Queue(0)
+            self.resultsQueue = multiprocessing.Queue(0)
 
             # Create worker threads
             self.workers = []
             for _ in range(num):
                 worker = Worker(self.requestQueue, self.resultsQueue, interrupted)
                 self.workers.append(worker)
-
-            if 'prev_size' in locals():
-                threading.stack_size(prev_size)
 
         def put(self, task):
             """Put task into request queue."""
@@ -345,7 +324,7 @@ else:
         This class is thread safe.
         """
 
-        def __init__(self, taskmaster, num, stack_size):
+        def __init__(self, taskmaster, num):
             """Create a new parallel job given a taskmaster.
 
             The taskmaster's next_task() method should return the next
@@ -362,7 +341,7 @@ else:
 
             self.taskmaster = taskmaster
             self.interrupted = InterruptState()
-            self.tp = ThreadPool(num, stack_size, self.interrupted)
+            self.tp = ThreadPool(num, self.interrupted)
 
             self.maxjobs = num
 
