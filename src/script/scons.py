@@ -49,6 +49,10 @@ __developer__ = "__DEVELOPER__"
 import os
 import sys
 
+from datetime import datetime
+
+START = datetime.now()
+
 ##############################################################################
 # BEGIN STANDARD SCons SCRIPT HEADER
 #
@@ -202,6 +206,8 @@ if __name__ == "__main__":
     # this does all the work, and calls sys.exit
     # with the proper exit status when done.
     SCons.Script.main()
+
+    print(datetime.now() - START)
 
 # Local Variables:
 # tab-width:4
