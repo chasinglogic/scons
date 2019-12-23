@@ -496,6 +496,9 @@ class ListSubber(collections.UserList):
         self.in_strip = None
         self.next_line()
 
+    def expanded(self, s):
+        return is_String(s) and _separate_args.findall(s) is None
+
     def expand(self, s, lvars, within_list):
         """Expand a single "token" as necessary, appending the
         expansion to the current result.
@@ -547,6 +550,10 @@ class ListSubber(collections.UserList):
                      raise_exception(NameError(), lvars['TARGETS'], s)
                 elif s is None:
                      return
+
+                if self.expanded(s):
+                    self.append(s)
+                    return
 
                 # Before re-expanding the result, handle
                 # recursive expansion by copying the local
