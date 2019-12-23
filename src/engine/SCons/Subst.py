@@ -488,6 +488,7 @@ class ListSubber(collections.UserList):
         self.mode = mode
         self.conv = conv
         self.gvars = gvars
+        self.stack = None
 
         if self.mode == SUBST_RAW:
             self.add_strip = lambda x: self.append(x)
@@ -589,7 +590,163 @@ class ListSubber(collections.UserList):
         else:
             self.append(s)
 
-    def substitute(self, args, lvars, within_list):
+
+    def handle_callable(self, s, lvars, within_list):
+        try:
+            s = s(target=lvars['TARGETS'],
+                  source=lvars['SOURCES'],
+                  env=self.env,
+                  for_signature=(self.mode != SUBST_CMD))
+        except TypeError:
+            # This probably indicates that it's a callable
+            # object that doesn't match our calling arguments
+            # (like an Action).
+            if self.mode == SUBST_RAW:
+                self.append(s)
+                self.next_word()
+                return
+            
+            s = self.conv(s)
+
+        if self.tokenizable(s):
+            self.stack.extendleft(reversed(self.tokenize(s, lvars, within_list)))
+        else:
+            self.stack.appendleft((s, lvars, within_list))
+
+    def handle_sequence(self, s, lvars, within_list):
+        self.stack.extendleft(reversed([
+            (a, lvars, True)
+            for a in s
+        ]))
+
+    def handle_string(self, s, lvars, within_list):
+        if len(s) == 1:
+            self.append(s)
+            if self.in_strip is None:
+                self.next_word()
+            return
+
+        s0, s1 = s[:2]
+        if s0 != '$':
+            self.append(s)
+            if self.in_strip is None:
+                self.next_word()
+            return
+
+        if s1 == '$':
+             self.append('$')
+             return
+        elif s1 == '(':
+             self.open_strip('$(')
+             return
+        elif s1 == ')':
+             self.close_strip('$)')
+             return
+        
+        key = s[1:]
+        if key[0] == '{' or key.find('.') >= 0:
+             if key[0] == '{':
+                  key = key[1:-1]
+
+        s = None
+        if key in lvars:
+             s = lvars[key]
+        elif key in self.gvars:
+             s = self.gvars[key]
+        else:
+             try:
+                  s = eval(key, self.gvars, lvars)
+             except KeyboardInterrupt:
+                  raise
+             except Exception as e:
+                  if e.__class__ in AllowableExceptions:
+                       return
+                  raise_exception(e, lvars['TARGETS'], s)
+
+        if s is None and NameError not in AllowableExceptions:
+             raise_exception(NameError(), lvars['TARGETS'], s)
+        elif self.expanded(s):
+             self.append(s)
+             if self.in_strip is None:
+                  self.next_word()
+             return
+
+        # Before re-expanding the result, handle
+        # recursive expansion by copying the local
+        # variable dictionary and overwriting a null
+        # string for the value of the variable name
+        # we just expanded.
+        lv = lvars.copy()
+        var = key.split('.')[0]
+        lv[var] = ''
+        if self.tokenizable(s):
+             self.stack.extendleft(reversed(self.tokenize(s, lv, within_list)))
+        else:
+             self.stack.appendleft((s, lv, within_list))
+
+    def tokenizable(self, s):
+        return is_String(s) and not isinstance(s, CmdStringHolder)
+
+    def tokenize(self, s, lvars, within_list=False):
+         tokens = [
+              (arg, lvars, within_list)
+              for arg in _separate_args.findall(s)
+              if arg
+         ]
+
+         if not tokens:
+              return (s, lvars, within_list)
+
+         return tokens
+
+    def substitute(self, original_args, original_lvars, within_list=False):
+        """Substitute expansions in an argument or list of arguments.
+
+         This serves as a wrapper for splitting up a string into
+         separate tokens.
+        """
+        if not original_args:
+            return
+
+        if self.tokenizable(original_args):
+            # Call str in case it's a UserString.
+            self.stack = collections.deque(self.tokenize(str(original_args), original_lvars, within_list))
+        else:
+            self.stack = collections.deque([(original_args, original_lvars, within_list)])
+
+        while self.stack:
+            s, lvars, within_list = self.stack.popleft()
+            if is_String(s):
+                if within_list and self.tokenizable(s):
+                    self.stack.extendleft(self.tokenize(s, lvars, False))
+                    continue
+
+                if not isinstance(s, CmdStringHolder):
+                    if s[0] in ' \t\n\r\f\v':
+                        if '\n' in s:
+                            self.next_line()
+                        elif within_list:
+                            self.append(s)
+                        else:
+                            self.next_word()
+                            continue
+
+                self.handle_string(s, lvars, within_list)
+
+            elif is_Sequence(s):
+                self.handle_sequence(s, lvars, within_list)
+
+            elif callable(s):
+                self.handle_callable(s, lvars, within_list)
+
+            elif s is None:
+                self.this_word()
+
+            else:
+                self.append(s)
+                self.next_word()
+
+    def substitute2(self, args, lvars, within_list):
         """Substitute expansions in an argument or list of arguments.
 
         This serves as a wrapper for splitting up a string into
